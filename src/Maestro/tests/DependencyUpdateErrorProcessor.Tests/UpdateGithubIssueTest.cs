@@ -265,7 +265,8 @@ namespace DependencyUpdateErrorProcessor.Tests
                 new DateTime(2200, 03, 01),
                 new User(),
                 new ReactionSummary(),
-                author);
+                author
+            );
             List<IssueComment> issueComment = new List<IssueComment> { comment };
             List<NewIssue> newIssues = new List<NewIssue>();
             List<string> newCommentInfo = new List<string>();
