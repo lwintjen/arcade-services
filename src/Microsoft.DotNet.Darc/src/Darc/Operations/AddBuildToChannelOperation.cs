@@ -2,15 +2,18 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Maestro.Data;
 using Microsoft.DotNet.Darc.Helpers;
 using Microsoft.DotNet.Darc.Options;
 using Microsoft.DotNet.DarcLib;
 using Microsoft.DotNet.Maestro.Client;
 using Microsoft.DotNet.Maestro.Client.Models;
 using Microsoft.DotNet.Services.Utility;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -55,6 +58,31 @@ namespace Microsoft.DotNet.Darc.Operations
             _options = options;
         }
 
+
+        private void AddIfNotPresent(BuildAssetRegistryContext context, global::Maestro.Data.Models.Asset item, string feed, global::Maestro.Data.Models.LocationType container)
+        {
+            foreach (var location in item.Locations)
+            {
+                if (location.Location.Equals(feed, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            item.Locations.Add(
+                new global::Maestro.Data.Models.AssetLocation()
+                {
+                    Location = feed,
+                    Type = container
+                }
+            );
+
+            context.Assets.Update(item);
+            context.SaveChanges();
+
+            Console.WriteLine($"\tModified! Added feed {feed}");
+        }
+
         /// <summary>
         ///     Assigns a build to a channel.
         /// </summary>
@@ -65,6 +93,40 @@ namespace Microsoft.DotNet.Darc.Operations
             {
                 IRemote remote = RemoteFactory.GetBarOnlyRemote(_options, Logger);
 
+                using (var context = new BuildAssetRegistryContextFactory().CreateDbContext(null))
+                {
+                    var build = context.Builds
+                        .Include(b => b.Assets)
+                        .ThenInclude(ass => ass.Locations)
+                        .Where(b => b.Id == _options.Id).FirstOrDefault();
+
+                    foreach (var item in build.Assets.ToList())
+                    {
+                        Console.WriteLine($"{item.Name}  {item.Version}");
+
+                        if (item.Name.EndsWith(".symbols.nupkg"))
+                        {
+                            AddIfNotPresent(context, item, "https://dotnetfeed.blob.core.windows.net/dotnet-core/index.json", global::Maestro.Data.Models.LocationType.Container);
+                        }
+                        else if (item.Name.EndsWith(".sha") || item.Name.EndsWith(".sha512"))
+                        {
+                            AddIfNotPresent(context, item, "https://dotnetclichecksums.blob.core.windows.net/dotnet/index.json", global::Maestro.Data.Models.LocationType.Container);
+                        }
+                        else if (item.Name.Contains("/")) // Which means it's not a .nupkg
+                        {
+                            AddIfNotPresent(context, item, "https://dotnetcli.blob.core.windows.net/dotnet/index.json", global::Maestro.Data.Models.LocationType.Container);
+                        }
+
+                        foreach (var location in item.Locations)
+                        {
+                            Console.WriteLine($"\t {location.Location}");
+                        }
+                    }
+                }
+
+
+
+                /*
                 Build build = await remote.GetBuildAsync(_options.Id);
                 if (build == null)
                 {
@@ -167,8 +229,8 @@ namespace Microsoft.DotNet.Darc.Operations
                 }
 
                 PrintSubscriptionInfo(applicableSubscriptions);
-
-                return Constants.SuccessCode;
+                */
+                return await Task.FromResult(Constants.SuccessCode);
             }
             catch (AuthenticationException e)
             {
@@ -182,7 +244,8 @@ namespace Microsoft.DotNet.Darc.Operations
             }
         }
 
-        private async Task<int> PromoteBuildAsync(Build build, List<Channel> targetChannels, IRemote remote)
+
+        private async Task<int> PromoteBuildAsync(Maestro.Client.Models.Build build, List<Maestro.Client.Models.Channel> targetChannels, IRemote remote)
         {
             if (_options.SkipAssetsPublishing)
             {
@@ -348,7 +411,7 @@ namespace Microsoft.DotNet.Darc.Operations
         /// by specifying both, branch & SHA, on the command line.
         /// </summary>
         /// <param name="build">Build for which the Arcade SDK dependency build will be inferred.</param>
-        private async Task<(string sourceBranch, string sourceVersion)> GetSourceBranchInfoAsync(Build build)
+        private async Task<(string sourceBranch, string sourceVersion)> GetSourceBranchInfoAsync(Maestro.Client.Models.Build build)
         {
             bool hasSourceBranch = !string.IsNullOrEmpty(_options.SourceBranch);
             bool hasSourceSHA = !string.IsNullOrEmpty(_options.SourceSHA);
@@ -396,10 +459,10 @@ namespace Microsoft.DotNet.Darc.Operations
                 return (null, null);
             }
 
-            IEnumerable<Asset> listArcadeSDKAssets = await repoAndBarRemote.GetAssetsAsync(sourceBuildArcadeSDKDependency.Name, sourceBuildArcadeSDKDependency.Version)
+            IEnumerable<Maestro.Client.Models.Asset> listArcadeSDKAssets = await repoAndBarRemote.GetAssetsAsync(sourceBuildArcadeSDKDependency.Name, sourceBuildArcadeSDKDependency.Version)
                 .ConfigureAwait(false);
 
-            Asset sourceBuildArcadeSDKDepAsset = listArcadeSDKAssets.FirstOrDefault();
+            Maestro.Client.Models.Asset sourceBuildArcadeSDKDepAsset = listArcadeSDKAssets.FirstOrDefault();
             
             if (sourceBuildArcadeSDKDepAsset == null)
             {
@@ -407,7 +470,7 @@ namespace Microsoft.DotNet.Darc.Operations
                 return (null, null);
             }
 
-            Build sourceBuildArcadeSDKDepBuild = await repoAndBarRemote.GetBuildAsync(sourceBuildArcadeSDKDepAsset.BuildId);
+            Maestro.Client.Models.Build sourceBuildArcadeSDKDepBuild = await repoAndBarRemote.GetBuildAsync(sourceBuildArcadeSDKDepAsset.BuildId);
 
             if (sourceBuildArcadeSDKDepBuild == null)
             {
@@ -436,13 +499,13 @@ namespace Microsoft.DotNet.Darc.Operations
             return (sourceBuildArcadeSDKDepBuild.GitHubBranch, sourceBuildArcadeSDKDepBuild.Commit);
         }
 
-        private void PrintSubscriptionInfo(List<Subscription> applicableSubscriptions)
+        private void PrintSubscriptionInfo(List<Maestro.Client.Models.Subscription> applicableSubscriptions)
         {
-            IEnumerable<Subscription> subscriptionsThatWillFlowImmediately = applicableSubscriptions.Where(s => s.Enabled &&
-                    s.Policy.UpdateFrequency == UpdateFrequency.EveryBuild);
-            IEnumerable<Subscription> subscriptionsThatWillFlowTomorrowOrNotAtAll = applicableSubscriptions.Where(s => s.Enabled &&
-                    s.Policy.UpdateFrequency != UpdateFrequency.EveryBuild);
-            IEnumerable<Subscription> disabledSubscriptions = applicableSubscriptions.Where(s => !s.Enabled);
+            IEnumerable<Maestro.Client.Models.Subscription> subscriptionsThatWillFlowImmediately = applicableSubscriptions.Where(s => s.Enabled &&
+                    s.Policy.UpdateFrequency == Maestro.Client.Models.UpdateFrequency.EveryBuild);
+            IEnumerable<Maestro.Client.Models.Subscription> subscriptionsThatWillFlowTomorrowOrNotAtAll = applicableSubscriptions.Where(s => s.Enabled &&
+                    s.Policy.UpdateFrequency != Maestro.Client.Models.UpdateFrequency.EveryBuild);
+            IEnumerable<Maestro.Client.Models.Subscription> disabledSubscriptions = applicableSubscriptions.Where(s => !s.Enabled);
 
             // Print out info
             if (subscriptionsThatWillFlowImmediately.Any())
