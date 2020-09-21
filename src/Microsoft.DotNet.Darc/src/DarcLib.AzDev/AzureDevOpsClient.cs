@@ -87,7 +87,7 @@ namespace Microsoft.DotNet.DarcLib
             return GetFileContentsAsync(accountName, projectName, repoName, filePath, branch);
         }
 
-        private static readonly List<string> VersionTypes = new List<string>() {"branch", "commit", "tag"};
+        private static readonly List<string> VersionTypes = new List<string>() { "branch", "commit", "tag" };
         /// <summary>
         ///     Retrieve the contents of a text file in a repo on a specific branch
         /// </summary>
@@ -265,8 +265,7 @@ namespace Microsoft.DotNet.DarcLib
                     break;
             }
 
-            query.Append(
-                $"searchCriteria.sourceRefName=refs/heads/{pullRequestBranch}&searchCriteria.status={prStatus.ToString().ToLower()}");
+            query.Append($"searchCriteria.sourceRefName=refs/heads/{pullRequestBranch}&searchCriteria.status={prStatus.ToString().ToLower()}");
 
             if (!string.IsNullOrEmpty(keyword))
             {
@@ -283,7 +282,7 @@ namespace Microsoft.DotNet.DarcLib
                 HttpMethod.Get,
                 accountName,
                 projectName,
-                $"repositories/{repoName}/pullrequests?{query}",
+                $"_apis/git/repositories/{repoName}/pullrequests?{query}",
                 _logger);
 
             JArray values = JArray.Parse(content["value"].ToString());
@@ -637,6 +636,53 @@ This pull request has not been merged because Maestro++ is waiting on the follow
         }
 
         /// <summary>
+        ///     Get the commits in a repo
+        /// </summary>
+        /// <param name="repoUri">Repository uri</param>
+        /// <param name="sha">Sha of the commit</param>
+        /// <returns>Return the commit matching the specified sha. Null if no commit were found.</returns>
+        public Task<Commit> GetCommitAsync(string repoUri, string sha)
+        {
+            (string accountName, string projectName, string repoName) = ParseRepoUri(repoUri);
+            return GetCommitAsync(accountName, projectName, repoName, sha);
+        }
+
+        /// <summary>
+        ///     Get the commits in a repo 
+        /// </summary>
+        /// <param name="accountName">Azure DevOps account</param>
+        /// <param name="projectName">Azure DevOps project</param>
+        /// <param name="repoName">Azure DevOps repo</param>
+        /// <param name="sha">Sha of the commit</param>
+        /// <returns>Return the commit matching the specified sha. Null if no commit were found.</returns>
+        private async Task<Commit> GetCommitAsync(string accountName, string projectName, string repoName, string sha)
+        {
+            try
+            {
+                JObject content = await this.ExecuteAzureDevOpsAPIRequestAsync(
+                    HttpMethod.Get,
+                    accountName,
+                    projectName,
+                    $"_apis/git/repositories/{repoName}/commits",
+                    _logger);
+                JArray values = JArray.Parse(content["value"].ToString());
+                List<Commit> commits = new List<Commit>();
+                foreach(JToken commit in values)
+                {
+                    if (commit["sha"].Value<string>().CompareTo(sha) == 0)
+                    {
+                        return new Commit(commit["commit"]["author"].Value<string>(), commit["sha"].Value<string>(), commit["commit"]["message"].Value<string>());
+                    }
+                }
+                return null;
+            }
+            catch (HttpRequestException exc) when (exc.Message.Contains(((int)HttpStatusCode.NotFound).ToString()))
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         ///     Diff two commits in a repository and return information about them.
         /// </summary>
         /// <param name="repoUri">Repository uri</param>
@@ -808,7 +854,7 @@ This pull request has not been merged because Maestro++ is waiting on the follow
         /// <param name="baseAddressSubpath">[baseAddressSubPath]dev.azure.com subdomain to make the request</param>
         /// <param name="retryCount">Maximum number of tries to attempt the API request</param>
         /// <returns>Http response</returns>
-        private async Task<JObject> ExecuteAzureDevOpsAPIRequestAsync(
+        public async Task<JObject> ExecuteAzureDevOpsAPIRequestAsync(
             HttpMethod method,
             string accountName,
             string projectName,

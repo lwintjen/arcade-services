@@ -413,6 +413,11 @@ namespace Microsoft.DotNet.Maestro.Tasks
             return GetEnv("BUILD_REPOSITORY_URI");
         }
 
+        private string GetAzDevRepositoryName()
+        {
+            return GetEnv("BUILD_REPOSITORY_NAME");
+        }
+
         private string GetAzDevBranch()
         {
             return GetEnv("BUILD_SOURCEBRANCH");
@@ -523,6 +528,7 @@ namespace Microsoft.DotNet.Maestro.Tasks
 
                         mergedInfo.FileExtensionSignInfos.AddRange(signInfo.FileExtensionSignInfos);
                         mergedInfo.FileSignInfos.AddRange(signInfo.FileSignInfos);
+                        mergedInfo.CertificatesSignInfo.AddRange(signInfo.CertificatesSignInfo);
                         mergedInfo.ItemsToSign.AddRange(signInfo.ItemsToSign);
                         mergedInfo.StrongNameSignInfos.AddRange(signInfo.StrongNameSignInfos);
                     }
@@ -530,6 +536,7 @@ namespace Microsoft.DotNet.Maestro.Tasks
 
                 mergedInfo.FileExtensionSignInfos = new List<FileExtensionSignInfo>(mergedInfo.FileExtensionSignInfos.Distinct(new FileExtensionSignInfoComparer()));
                 mergedInfo.FileSignInfos = new List<FileSignInfo>(mergedInfo.FileSignInfos.Distinct(new FileSignInfoComparer()));
+                mergedInfo.CertificatesSignInfo = new List<CertificatesSignInfo>(mergedInfo.CertificatesSignInfo.Distinct(new CertificatesSignInfoComparer()));
                 mergedInfo.ItemsToSign = new List<ItemsToSign>(mergedInfo.ItemsToSign.Distinct(new ItemsToSignComparer()));
                 mergedInfo.StrongNameSignInfos = new List<StrongNameSignInfo>(mergedInfo.StrongNameSignInfos.Distinct(new StrongNameSignInfoComparer()));
             }
@@ -643,7 +650,7 @@ namespace Microsoft.DotNet.Maestro.Tasks
                         new BuildIdentity
                         {
                             Attributes = manifestBuildData.ToDictionary(),
-                            Name = GetAzDevRepository(),
+                            Name = GetAzDevRepositoryName(),
                             BuildId = GetAzDevBuildNumber(),
                             Branch = GetAzDevBranch(),
                             Commit = GetAzDevCommit(),
@@ -723,6 +730,17 @@ namespace Microsoft.DotNet.Maestro.Tasks
                     {
                         new XAttribute(nameof(fileSignInfo.Include), fileSignInfo.Include),
                         new XAttribute(nameof(fileSignInfo.CertificateName), fileSignInfo.CertificateName)
+                    }));
+            }
+
+            foreach (CertificatesSignInfo certificatesSignInfo in signingInformation.CertificatesSignInfo)
+            {
+                signingMetadata.Add(new XElement(
+                    nameof(CertificatesSignInfo),
+                    new XAttribute[]
+                    {
+                        new XAttribute(nameof(certificatesSignInfo.Include), certificatesSignInfo.Include),
+                        new XAttribute(nameof(certificatesSignInfo.DualSigningAllowed), certificatesSignInfo.DualSigningAllowed)
                     }));
             }
 

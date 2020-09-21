@@ -491,7 +491,7 @@ namespace Microsoft.DotNet.DarcLib
                 return toUpdate;
             }
 
-            List<CoherencyError> coherencyErrors = new List<CoherencyError>();
+            Dictionary<string, CoherencyError> coherencyErrors = new Dictionary<string, CoherencyError>();
 
             // Cache of dependencies. Key is "<repo>@<sha>".
             Dictionary<string, IEnumerable<DependencyDetail>> dependenciesCache =
@@ -564,16 +564,20 @@ namespace Microsoft.DotNet.DarcLib
                     if (cpdDependency == null)
                     {
                         // This is an invalid state. The dependency should be listed in the cpd parent's version details file.
-                        coherencyErrors.Add(new CoherencyError()
+                        string coherencyErrorKey = $"{parentCoherentDependency.RepoUri}{parentCoherentDependency.Commit}{dependencyToUpdate.Name}";
+                        if (!coherencyErrors.ContainsKey(coherencyErrorKey))
                         {
-                            Dependency = dependencyToUpdate,
-                            Error = $"{parentCoherentDependency.RepoUri} @ {parentCoherentDependency.Commit} does not contain dependency {dependencyToUpdate.Name}",
-                            PotentialSolutions = new List<string> {
+                            coherencyErrors.Add(coherencyErrorKey, new CoherencyError()
+                            {
+                                Dependency = dependencyToUpdate,
+                                Error = $"{parentCoherentDependency.RepoUri} @ {parentCoherentDependency.Commit} does not contain dependency {dependencyToUpdate.Name}",
+                                PotentialSolutions = new List<string> {
                                 $"Add the dependency to {parentCoherentDependency.RepoUri}.",
                                 $"Pin the dependenency.",
                                 "Remove the CoherentParentDependency attribute."
                             }
-                        });
+                            });
+                        }
 
                         // This invalidates any remaining chain we were attempting to update, since any updates
                         // up the chain would change results down the chain.
@@ -615,7 +619,7 @@ namespace Microsoft.DotNet.DarcLib
 
             if (coherencyErrors.Any())
             {
-                throw new DarcCoherencyException(coherencyErrors);
+                throw new DarcCoherencyException(coherencyErrors.Values);
             }
 
             return toUpdate;
@@ -1206,6 +1210,18 @@ namespace Microsoft.DotNet.DarcLib
         }
 
         /// <summary>
+        ///     Get the commits in a repo on the specific branch 
+        /// </summary>
+        /// <param name="repoUri">Repository uri</param> 
+        /// <param name="sha">Sha of the commit</param>
+        /// <returns>Return the commit matching the specified sha. Null if no commit were found.</returns>
+        public Task<Commit> GetCommitAsync(string repoUri, string sha)
+        {
+            CheckForValidGitClient();
+            return _gitClient.GetCommitAsync(repoUri, sha);
+        }
+
+        /// <summary>
         ///     Retrieve the list of channels from the build asset registry.
         /// </summary>
         /// <param name="classification">Optional classification to get</param>
@@ -1377,7 +1393,7 @@ namespace Microsoft.DotNet.DarcLib
         /// <param name="includeDisabledSubscriptions">Should disabled subscriptions be included in the graph</param>
         /// <param name="includedFrequencies">Include only subscription with specified frequencies. Leave null or empty to include all</param>
         /// <returns>Dependency flow graph for given channel</returns>
-        public async Task<DependencyFlowGraph> GetDependencyFlowGraph(
+        public async Task<DependencyFlowGraph> GetDependencyFlowGraphAsync(
             int channelId,
             int days,
             bool includeArcade,
@@ -1386,7 +1402,7 @@ namespace Microsoft.DotNet.DarcLib
             IReadOnlyList<string> includedFrequencies)
         {
             CheckForValidBarClient();
-            return await _barClient.GetDependencyFlowGraph(
+            return await _barClient.GetDependencyFlowGraphAsync(
                 channelId,
                 days,
                 includeArcade,

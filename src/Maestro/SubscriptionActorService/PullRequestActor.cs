@@ -6,14 +6,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
-using System.Reflection.Metadata;
 using System.Runtime.Serialization;
 using System.Text;
 using System.Threading.Tasks;
 using Maestro.Contracts;
 using Maestro.Data;
 using Maestro.Data.Models;
-using Maestro.MergePolicies;
 using Microsoft.DotNet.DarcLib;
 using Microsoft.DotNet.ServiceFabric.ServiceHost;
 using Microsoft.DotNet.ServiceFabric.ServiceHost.Actors;
@@ -245,13 +243,9 @@ namespace SubscriptionActorService
 
         protected abstract Task<IReadOnlyList<MergePolicyDefinition>> GetMergePolicyDefinitions();
 
-        private class DependencyMap
+        private class ReferenceLinksMap
         {
-            public DependencyMap()
-            {
-                DependencyShaMap = new Dictionary<(string from, string to), int>();
-            }
-            public Dictionary<(string from, string to), int> DependencyShaMap { get; set; }
+            public Dictionary<(string from, string to), int> ShaRangeToLinkId { get; } = new Dictionary<(string from, string to), int>();
         }
 
         private async Task<string> GetSourceRepositoryAsync(Guid subscriptionId)
@@ -404,7 +398,7 @@ namespace SubscriptionActorService
             IRemote darc = await DarcRemoteFactory.GetRemoteAsync(targetRepository, Logger);
 
             InProgressPullRequest pr = maybePr.Value;
-            
+
             PrStatus status = await darc.GetPullRequestStatusAsync(prUrl);
             switch (status)
             {
@@ -419,9 +413,9 @@ namespace SubscriptionActorService
                         case MergePolicyCheckResult.Merged:
                             await UpdateSubscriptionsForMergedPRAsync(pr.ContainedSubscriptions);
                             await AddDependencyFlowEventsAsync(
-                                pr.ContainedSubscriptions, 
-                                DependencyFlowEventType.Completed, 
-                                DependencyFlowEventReason.AutomaticallyMerged, 
+                                pr.ContainedSubscriptions,
+                                DependencyFlowEventType.Completed,
+                                DependencyFlowEventReason.AutomaticallyMerged,
                                 checkPolicyResult.Result,
                                 prUrl);
                             await StateManager.RemoveStateAsync(PullRequest);
@@ -443,14 +437,14 @@ namespace SubscriptionActorService
                         await UpdateSubscriptionsForMergedPRAsync(pr.ContainedSubscriptions);
                     }
 
-                    DependencyFlowEventReason reason = status == PrStatus.Merged ? 
-                        DependencyFlowEventReason.ManuallyMerged : 
+                    DependencyFlowEventReason reason = status == PrStatus.Merged ?
+                        DependencyFlowEventReason.ManuallyMerged :
                         DependencyFlowEventReason.ManuallyClosed;
 
                     await AddDependencyFlowEventsAsync(
-                        pr.ContainedSubscriptions, 
-                        DependencyFlowEventType.Completed, 
-                        reason, 
+                        pr.ContainedSubscriptions,
+                        DependencyFlowEventType.Completed,
+                        reason,
                         pr.MergePolicyResult,
                         prUrl);
                     await StateManager.RemoveStateAsync(PullRequest);
@@ -483,7 +477,7 @@ namespace SubscriptionActorService
                 pr,
                 darc,
                 policyDefinitions);
-            
+
             await UpdateMergeStatusAsync(darc, pr.Url, result.Results);
             if (result.Failed || result.Pending)
             {
@@ -543,13 +537,13 @@ namespace SubscriptionActorService
         }
 
         private async Task AddDependencyFlowEventsAsync(
-            IEnumerable<SubscriptionPullRequestUpdate> subscriptionPullRequestUpdates, 
-            DependencyFlowEventType flowEvent, 
-            DependencyFlowEventReason reason, 
+            IEnumerable<SubscriptionPullRequestUpdate> subscriptionPullRequestUpdates,
+            DependencyFlowEventType flowEvent,
+            DependencyFlowEventReason reason,
             MergePolicyCheckResult policy,
             string prUrl)
         {
-            
+
             foreach (SubscriptionPullRequestUpdate update in subscriptionPullRequestUpdates)
             {
                 ISubscriptionActor actor = SubscriptionActorFactory.Lookup(new ActorId(update.SubscriptionId));
@@ -767,9 +761,9 @@ namespace SubscriptionActorService
                     inProgressPr.Url = prUrl;
 
                     await AddDependencyFlowEventsAsync(
-                        inProgressPr.ContainedSubscriptions, 
-                        DependencyFlowEventType.Created, 
-                        DependencyFlowEventReason.New, 
+                        inProgressPr.ContainedSubscriptions,
+                        DependencyFlowEventType.Created,
+                        DependencyFlowEventReason.New,
                         MergePolicyCheckResult.PendingPolicies,
                         prUrl);
 
@@ -785,9 +779,9 @@ namespace SubscriptionActorService
 
                 // If we did not create a PR, then mark the dependency flow as completed as nothing to do.
                 await AddDependencyFlowEventsAsync(
-                        inProgressPr.ContainedSubscriptions, 
-                        DependencyFlowEventType.Completed, 
-                        DependencyFlowEventReason.NothingToDo, 
+                        inProgressPr.ContainedSubscriptions,
+                        DependencyFlowEventType.Completed,
+                        DependencyFlowEventReason.NothingToDo,
                         MergePolicyCheckResult.PendingPolicies,
                         null);
 
@@ -844,6 +838,7 @@ namespace SubscriptionActorService
                 List<DependencyUpdate> dependenciesToCommit = deps;
                 await CalculateCommitMessage(update, deps, message);
                
+
 
                 if (combineCoherencyWithNonCoherency && coherencyUpdate.update != null)
                 {
@@ -990,39 +985,31 @@ namespace SubscriptionActorService
                 subscriptionSection.AppendLine();
                 subscriptionSection.AppendLine($"- **Updates**:");
 
-                DependencyMap dependencyMapObject = new DependencyMap();
+                ReferenceLinksMap dependencyMapObject = new ReferenceLinksMap();
 
-                DependencyDetail FindDetail(string name, string version) {
-                    return allDependencies.First(d => d.Name == name && d.Version == version);
-                }
-
-                int markdownLinkNumber = 1;
+                int referenceLinkId = 1;
                 foreach (DependencyUpdate dep in deps)
                 {
-                    DependencyDetail from = FindDetail(dep.From.Name, dep.From.Version);
-                    DependencyDetail to = FindDetail(dep.To.Name, dep.To.Version);
-                    if (!dependencyMapObject.DependencyShaMap.ContainsKey((from.Commit, to.Commit)))
+                    if (!dependencyMapObject.ShaRangeToLinkId.ContainsKey((dep.From.Commit, dep.To.Commit)))
                     {
-                        dependencyMapObject.DependencyShaMap[(from.Commit, to.Commit)] = markdownLinkNumber++;
+                        dependencyMapObject.ShaRangeToLinkId.Add((dep.From.Commit, dep.To.Commit), referenceLinkId++);
                     }
                 }
 
                 foreach (DependencyUpdate dep in deps)
                 {
-                    DependencyDetail from = FindDetail(dep.From.Name, dep.From.Version);
-                    DependencyDetail to = FindDetail(dep.To.Name, dep.To.Version);
-                    subscriptionSection.AppendLine($"  - **{dep.To.Name}**: [from {dep.From.Version} to {dep.To.Version}][{dependencyMapObject.DependencyShaMap[(from.Commit, to.Commit)]}]");
+                    subscriptionSection.AppendLine($"  - **{dep.To.Name}**: [from {dep.From.Version} to {dep.To.Version}][{dependencyMapObject.ShaRangeToLinkId[(dep.From.Commit, dep.To.Commit)]}]");
                 }
 
                 subscriptionSection.AppendLine();
-                foreach(int i in Enumerable.Range(1, markdownLinkNumber))
+                for (int i = 1; i <= referenceLinkId; i++)
                 {
-                    foreach (KeyValuePair<(string, string), int> entry in dependencyMapObject.DependencyShaMap)
+                    foreach (KeyValuePair<(string, string), int> entry in dependencyMapObject.ShaRangeToLinkId)
                     {
-                        if (entry.Value == markdownLinkNumber) 
+                        if (entry.Value == i)
                         {
-                            DependencyDetail to = allDependencies.Find(d => d.Commit == entry.Key.Item1);
-                            subscriptionSection.AppendLine($"[{markdownLinkNumber}]: {GetChangesURI(to.RepoUri, entry.Key.Item1, entry.Key.Item2)}");
+                            DependencyDetail to = deps.Find(d => d.To.Commit == entry.Key.Item2).To;
+                            subscriptionSection.AppendLine($"[{i}]: {GetChangesURI(to.RepoUri, entry.Key.Item1, entry.Key.Item2)}");
                         }
                     }
                 }
@@ -1047,7 +1034,7 @@ namespace SubscriptionActorService
 
             if (sectionStartIndex != -1 && sectionEndIndex != -1)
             {
-                sectionEndIndex+= sectionEndMarker.Length;
+                sectionEndIndex += sectionEndMarker.Length;
                 description.Remove(sectionStartIndex, sectionEndIndex - sectionStartIndex);
                 return sectionStartIndex;
             }
@@ -1058,7 +1045,27 @@ namespace SubscriptionActorService
 
         private string GetChangesURI(string repoURI, string from, string to)
         {
-            return $"{repoURI}/compare/{from}..{to}";
+            if (repoURI == null)
+            {
+                throw new ArgumentNullException(nameof(repoURI));
+            }
+            if (from == null)
+            {
+                throw new ArgumentNullException(nameof(from));
+            }
+            if (to == null)
+            {
+                throw new ArgumentNullException(nameof(to));
+            }
+
+            string fromSha = from.Length > 7 ? from.Substring(0, 7) : from;
+            string toSha = to.Length > 7 ? to.Substring(0, 7) : to;
+
+            if (repoURI.Contains("github.com"))
+            {
+                return $"{repoURI}/compare/{fromSha}...{toSha}";
+            }
+            return $"{repoURI}/branches?baseVersion=GC{fromSha}&targetVersion=GC{toSha}&_a=files";
         }
 
         private async Task UpdatePullRequestAsync(InProgressPullRequest pr, List<UpdateAssetsParameters> updates)
@@ -1093,14 +1100,14 @@ namespace SubscriptionActorService
             // At this point, pr.ContainedSubscriptions only containes the subscriptions that were not updated,
             // so everything that is in the previous list but not in the current list were updated.
             await AddDependencyFlowEventsAsync(
-                previousSubscriptions.Except(pr.ContainedSubscriptions), 
-                DependencyFlowEventType.Updated, 
-                DependencyFlowEventReason.FailedUpdate, 
+                previousSubscriptions.Except(pr.ContainedSubscriptions),
+                DependencyFlowEventType.Updated,
+                DependencyFlowEventReason.FailedUpdate,
                 pr.MergePolicyResult,
                 pr.Url);
-                        
+
             pr.ContainedSubscriptions.AddRange(requiredUpdates
-                .Where( u => !u.update.IsCoherencyUpdate)
+                .Where(u => !u.update.IsCoherencyUpdate)
                 .Select(
                     u => new SubscriptionPullRequestUpdate
                     {
@@ -1111,9 +1118,9 @@ namespace SubscriptionActorService
             // Mark any new dependency updates as Created. Any subscriptions that are in pr.ContainedSubscriptions
             // but were not in the previous list of subscripitons are new
             await AddDependencyFlowEventsAsync(
-                pr.ContainedSubscriptions.Except(previousSubscriptions), 
-                DependencyFlowEventType.Created, 
-                DependencyFlowEventReason.New, 
+                pr.ContainedSubscriptions.Except(previousSubscriptions),
+                DependencyFlowEventType.Created,
+                DependencyFlowEventReason.New,
                 MergePolicyCheckResult.PendingPolicies,
                 pr.Url);
 
@@ -1227,7 +1234,7 @@ namespace SubscriptionActorService
             {
                 RepositoryBranch repoBranch = await GetRepositoryBranch(repo, branch);
                 Context.RepositoryBranchUpdates.Add(
-                    update = new RepositoryBranchUpdate {RepositoryBranch = repoBranch});
+                    update = new RepositoryBranchUpdate { RepositoryBranch = repoBranch });
             }
             else
             {
@@ -1346,7 +1353,7 @@ namespace SubscriptionActorService
         protected override async Task<IReadOnlyList<MergePolicyDefinition>> GetMergePolicyDefinitions()
         {
             Subscription subscription = await GetSubscription();
-            return (IReadOnlyList<MergePolicyDefinition>) subscription.PolicyObject.MergePolicies ??
+            return (IReadOnlyList<MergePolicyDefinition>)subscription.PolicyObject.MergePolicies ??
                    Array.Empty<MergePolicyDefinition>();
         }
 
@@ -1401,7 +1408,7 @@ namespace SubscriptionActorService
         {
             RepositoryBranch repositoryBranch =
                 await Context.RepositoryBranches.FindAsync(Target.repository, Target.branch);
-            return (IReadOnlyList<MergePolicyDefinition>) repositoryBranch?.PolicyObject?.MergePolicies ??
+            return (IReadOnlyList<MergePolicyDefinition>)repositoryBranch?.PolicyObject?.MergePolicies ??
                    Array.Empty<MergePolicyDefinition>();
         }
     }
