@@ -19,7 +19,6 @@ using NuGet.Configuration;
 using NUnit.Framework;
 using Octokit;
 
-
 namespace Maestro.ScenarioTests
 {
     public class MaestroScenarioTestBase
